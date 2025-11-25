@@ -1,0 +1,75 @@
+name: Build Kernel Samsung Wingtech (a04)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout source
+      uses: actions/checkout@v3
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          bc bison flex libssl-dev gcc g++ clang python3 \
+          libncurses5-dev ccache make git zip \
+          wget xz-utils
+
+    - name: Prepare directories
+      run: mkdir -p toolchain/gcc toolchain/clang
+
+    - name: Download GCC 4.9 toolchain
+      run: |
+        cd toolchain/gcc
+        wget https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/master.tar.gz -O gcc.tar.gz
+        mkdir -p linux-x86/aarch64/aarch64-linux-android-4.9
+        tar -xzf gcc.tar.gz -C linux-x86/aarch64/aarch64-linux-android-4.9
+
+    - name: Download Clang r383902
+      run: |
+        cd toolchain/clang
+        wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/master/clang-r383902.tar.gz -O clang.tar.gz
+        mkdir -p host/linux-x86/clang-r383902
+        tar -xzf clang.tar.gz -C host/linux-x86/clang-r383902
+
+    - name: Export environment variables
+      run: |
+        echo "CROSS_COMPILE=$(pwd)/toolchain/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/aarch64-linux-androidkernel-" >> $GITHUB_ENV
+        echo "CC=$(pwd)/toolchain/clang/host/linux-x86/clang-r383902/bin/clang" >> $GITHUB_ENV
+        echo "CLANG_TRIPLE=aarch64-linux-gnu-" >> $GITHUB_ENV
+        echo "ARCH=arm64" >> $GITHUB_ENV
+        echo "KCFLAGS=-w" >> $GITHUB_ENV
+        echo "CONFIG_SECTION_MISMATCH_WARN_ONLY=y" >> $GITHUB_ENV
+
+    - name: Build kernel
+      run: |
+        make -C $(pwd) O=$(pwd)/out \
+          KCFLAGS=-w CONFIG_SECTION_MISMATCH_WARN_ONLY=y \
+          a05m_defconfig
+
+        make -C $(pwd) O=$(pwd)/out \
+          KCFLAGS=-w CONFIG_SECTION_MISMATCH_WARN_ONLY=y \
+          -j$(nproc)
+
+    - name: Copy Image to source tree
+      run: |
+        cp out/arch/arm64/boot/Image arch/arm64/boot/Image || echo "Image not found!"
+
+    - name: Archive output
+      run: |
+        cd out/arch/arm64/boot/
+        zip -r9 kernel.zip Image dtb* dtbo* 2>/dev/null || true
+
+    - name: Upload kernel artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: built-kernel
+        path: |
+          out/arch/arm64/boot/Image
+          out/arch/arm64/boot/kernel.zip
